@@ -117,7 +117,7 @@ server/.pytype/
 server/cython_debug/
 server/.venv/
 server/masterflash/core/migrations/
-server/venv/
+server/venv312/
 docker-compose.yaml
 mariadb_data
 mariadb_backup
