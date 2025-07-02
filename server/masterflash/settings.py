@@ -88,7 +88,7 @@ WSGI_APPLICATION = "masterflash.wsgi.application"
 
 ASGI_APPLICATION = "masterflash.asgi.application"
 
-REDIS_HOST = "localhost"
+REDIS_HOST = "172.19.64.115"
 REDIS_PORT = 6379
 
 

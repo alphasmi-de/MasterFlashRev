@@ -11,31 +11,64 @@ from masterflash.core.models import (
     WorkedHours,
 )
 
+from datetime import datetime, time, timedelta
 
 def get_shift(current_time: time) -> str:
     """
-    Determina el turno basado en la hora actual utilizando el horario definido en la base de datos.
-    Si no se encuentra el horario, retorna "Free".
+    Determina el nombre del turno basado en la hora actual (`current_time`).
+    
+    Utiliza el horario almacenado en la base de datos (`ShiftSchedule` con `id=1`).
+    Soporta correctamente turnos que cruzan la medianoche (por ejemplo, de 16:30 a 01:20).
+
+    Retorna:
+        - "First"  → si la hora está dentro del primer turno
+        - "Second" → si está dentro del segundo turno (aunque cruce la medianoche)
+        - "Free"   → si no pertenece a ningún turno definido
     """
+
     try:
-        # Se asume que el horario ha sido configurado previamente y se encuentra en el id=1.
+        # Se obtiene el registro de turnos (solo se espera uno configurado con id=1).
         schedule = ShiftSchedule.objects.get(id=1)
     except ShiftSchedule.DoesNotExist:
+        # Si no existe configuración, retorna "Free" como valor por defecto.
         return "Free"
 
-    # Extraer los rangos de turno
-    first_start, first_end = schedule.first_shift_start, schedule.first_shift_end
-    second_start, second_end = schedule.second_shift_start, schedule.second_shift_end
+    # Extrae los horarios de inicio y fin para ambos turnos desde el modelo.
+    first_start = schedule.first_shift_start       # Ej. 07:00
+    first_end = schedule.first_shift_end           # Ej. 16:25
 
-    # Evaluación del turno:
-    # Primer turno: dentro del rango definido.
+    second_start = schedule.second_shift_start     # Ej. 16:30
+    second_end = schedule.second_shift_end         # Ej. 01:20
+
+    # -----------------------------
+    # Lógica para el primer turno
+    # -----------------------------
+    # Si la hora actual está entre el inicio y el fin del primer turno, retorna "First".
     if first_start <= current_time <= first_end:
         return "First"
-    # Segundo turno: se asume que puede abarcar desde una hora hasta pasada la medianoche.
-    elif current_time >= second_start or current_time <= second_end:
-        return "Second"
+
+    # -----------------------------
+    # Lógica para el segundo turno
+    # -----------------------------
+
+    # Verifica si el segundo turno NO cruza la medianoche.
+    # Ejemplo: 16:30 a 23:59
+    if second_start <= second_end:
+        # Si la hora actual está dentro del rango simple, pertenece al segundo turno.
+        if second_start <= current_time <= second_end:
+            return "Second"
     else:
-        return "Free"
+        # El turno cruza la medianoche. Ejemplo: 16:30 a 01:20
+        # En este caso, la hora actual puede estar después de `second_start` (hoy)
+        # o antes de `second_end` (mañana), y aun así seguir siendo el mismo turno.
+        if current_time >= second_start or current_time <= second_end:
+            return "Second"
+
+    # -----------------------------
+    # Si no entra en ningún turno definido, se considera "Libre"
+    # -----------------------------
+    return "Free"
+
 
 
 def sum_pieces(machine: LinePress, shift: str, current_date) -> int:
