@@ -21,6 +21,7 @@ class StatePress(models.Model):
     state = models.CharField(max_length=50)
     employee_number = models.IntegerField(null=True, blank=True)
     comments = models.TextField(null=True, blank=True)
+    
 
     class Meta:
         indexes = [
