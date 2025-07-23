@@ -1,3 +1,30 @@
+"""
+Lista de métodos en este archivo y su propósito:
+
+1. get_shift(current_time: time) -> str
+   - Determina el turno actual ("First", "Second" o "Free") según la hora y la configuración en la base de datos.
+
+2. get_shift_date_filter(shift: str, query_date)
+   - Genera filtros ORM para obtener registros de producción según turno y fecha, considerando cruces de medianoche.
+
+3. get_shift_production(shift: str, part_number: str = None, work_order: str = None)
+   - Calcula la producción total (piezas OK y retrabajo) para un turno, opcionalmente filtrando por número de parte y orden de trabajo.
+
+4. sum_pieces(machine: LinePress, shift: str, current_date) -> int
+   - Suma las piezas producidas por una máquina en un turno y fecha específicos, usando el último registro de producción.
+
+5. send_production_data()
+   - Recopila y retorna datos de producción de todas las máquinas disponibles, incluyendo totales y estadísticas generales.
+
+   
+Métodos que sí utilizan get_shift_date_filter:
+sum_pieces: Lo usa para obtener los filtros de fecha y turno antes de consultar la suma de piezas.
+send_production_data: Lo usa para obtener los filtros de fecha y turno antes de consultar la producción total del turno actual.
+Métodos que NO utilizan get_shift_date_filter:
+get_shift: No lo utiliza, solo determina el turno actual según la hora.
+get_shift_production: No lo utiliza, filtra solo por turno, part_number y work_order, pero no por fecha/horario.
+   
+"""
 from datetime import time, datetime, timedelta
 from django.conf import settings
 from django.db.models import Q, Sum, Max
@@ -16,14 +43,10 @@ from datetime import datetime, time, timedelta
 def get_shift(current_time: time) -> str:
     """
     Determina el nombre del turno basado en la hora actual (`current_time`).
-    
-    Utiliza el horario almacenado en la base de datos (`ShiftSchedule` con `id=1`).
-    Soporta correctamente turnos que cruzan la medianoche (por ejemplo, de 16:30 a 01:20).
-
-    Retorna:
-        - "First"  → si la hora está dentro del primer turno
-        - "Second" → si está dentro del segundo turno (aunque cruce la medianoche)
-        - "Free"   → si no pertenece a ningún turno definido
+    - Obtiene la configuración de turnos desde la base de datos (ShiftSchedule).
+    - Verifica si la hora actual está dentro del rango del primer turno.
+    - Si no, verifica si está dentro del segundo turno, considerando si cruza la medianoche.
+    - Si no corresponde a ningún turno, retorna "Free".
     """
 
     try:
@@ -75,11 +98,11 @@ def get_shift(current_time: time) -> str:
 def get_shift_date_filter(shift: str, query_date):
     """
     Retorna filtros para date_time basados en el turno solicitado y la fecha.
-    Controla:
-      - Validaciones de entrada
-      - Turnos que cruzan la medianoche
-      - Turnos mal configurados
-      - Casos extremos como horarios iguales
+    - Valida los parámetros de entrada (turno y fecha).
+    - Obtiene la configuración de turnos desde la base de datos.
+    - Para el primer turno, construye el filtro entre las horas de inicio y fin del mismo día.
+    - Para el segundo turno, maneja el caso donde el turno cruza la medianoche (fin < inicio).
+    - Retorna dos objetos Q para filtrar en consultas ORM.
     """
 
     # Validación inicial
@@ -152,14 +175,10 @@ def get_shift_date_filter(shift: str, query_date):
 def get_shift_production(shift: str, part_number: str = None, work_order: str = None):
     """
     Obtiene la producción total para un turno completo, independientemente de la fecha.
-    
-    Args:
-        shift: El turno a consultar ("First" o "Second")
-        part_number: Filtrar por número de parte (opcional)
-        work_order: Filtrar por orden de trabajo (opcional)
-        
-    Returns:
-        Dict con totales de piezas OK y piezas para retrabajo
+    - Construye un filtro base por turno.
+    - Si se proporcionan part_number y work_order, los agrega al filtro.
+    - Realiza una agregación para sumar piezas OK y piezas de retrabajo.
+    - Retorna un diccionario con los totales.
     """
     # Construir el filtro base por turno
     query = Q(shift=shift)
@@ -184,9 +203,11 @@ def get_shift_production(shift: str, part_number: str = None, work_order: str = 
 
 def sum_pieces(machine: LinePress, shift: str, current_date) -> int:
     """
-    Suma las piezas producidas para una máquina, turno y fecha dados,
-    tomando como referencia el último registro de producción para determinar
-    el part_number y work_order. Si no hay registros o el turno no es válido, retorna 0.
+    Suma las piezas producidas para una máquina, turno y fecha dados.
+    - Obtiene el último registro de producción para la máquina para determinar part_number y work_order.
+    - Usa get_shift_date_filter para obtener los filtros de fecha y turno.
+    - Realiza una consulta filtrada y suma las piezas OK.
+    - Si no hay registros o el turno no es válido, retorna 0.
     """
     # Obtener el último registro de producción para la máquina.
     last_record = (
@@ -220,9 +241,13 @@ def sum_pieces(machine: LinePress, shift: str, current_date) -> int:
 def send_production_data():
     """
     Recopila y envía datos de producción de las máquinas disponibles en la planta.
-
-    Retorna:
-        dict: Datos de producción de las máquinas y estadísticas generales.
+    - Obtiene la fecha y hora actual, así como el turno.
+    - Obtiene todas las máquinas disponibles y sus estados.
+    - Obtiene la última fecha de producción y horas trabajadas para cada máquina.
+    - Usa get_shift_date_filter para obtener la producción total del turno actual.
+    - Obtiene datos adicionales desde Redis (número de molde previo).
+    - Construye un diccionario con los datos de cada máquina y totales generales.
+    - Retorna un diccionario con toda la información de producción.
     """
     print("Sending production data...")
     now = datetime.now()

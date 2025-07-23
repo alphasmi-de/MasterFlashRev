@@ -233,6 +233,19 @@ def load_machine_data(request):
 
 @require_http_methods(["GET"])
 def load_machine_data_production(request):
+    """
+    Obtiene y retorna los datos de producción de todas las máquinas disponibles en la planta.
+
+    - Recorre todas las máquinas registradas en la base de datos.
+    - Para cada máquina disponible:
+        - Obtiene el último registro de producción y estado.
+        - Si no hay producción, asigna valores por defecto.
+        - Usa get_shift_date_filter para filtrar la producción por turno y fecha actual.
+        - Calcula totales de piezas OK y retrabajo, así como el estado actual de la máquina.
+        - Construye un diccionario con los datos relevantes de la máquina.
+    - Suma el total de piezas producidas en el turno.
+    - Devuelve un JSON con los datos de todas las máquinas y el total de piezas producidas.
+    """
     machines = LinePress.objects.all()
     machines_data = []
     total_piecesProduced = 0
@@ -242,36 +255,25 @@ def load_machine_data_production(request):
     shift = get_shift(current_time)
 
     for machine in machines:
+        # Solo considera máquinas disponibles
         if machine.status != "Available":
             continue
 
+        # Obtiene el último registro de producción para la máquina
         production = (
             ProductionPress.objects.filter(press=machine.name)
             .order_by("-date_time")
             .first()
         )
+        # Obtiene todos los estados registrados para la máquina
         states = StatePress.objects.filter(name=machine.name)
 
+        # Asigna valores por defecto si no hay producción
         if production:
-            if production.part_number is None or production.part_number == "":
-                partNumber = "--------"
-            else:
-                partNumber = production.part_number
-
-            if production.employee_number is None or production.employee_number == "":
-                employeeNumber = "----"
-            else:
-                employeeNumber = production.employee_number
-
-            if production.work_order is None or production.work_order == "":
-                workOrder = ""
-            else:
-                workOrder = production.work_order
-
-            if production.molder_number is None or production.molder_number == "":
-                molderNumber = "----"
-            else:
-                molderNumber = production.molder_number
+            partNumber = production.part_number if production.part_number else "--------"
+            employeeNumber = production.employee_number if production.employee_number else "----"
+            workOrder = production.work_order if production.work_order else ""
+            molderNumber = production.molder_number if production.molder_number else "----"
         else:
             partNumber = "--------"
             employeeNumber = "----"
@@ -281,8 +283,8 @@ def load_machine_data_production(request):
         # Obtener los filtros de fecha y turno usando la función auxiliar
         from masterflash.core.utils import get_shift_date_filter
         date_filter, shift_filter = get_shift_date_filter(shift, current_date)
-        
-        # Aplicar los filtros a la consulta
+
+        # Aplicar los filtros a la consulta para obtener totales del turno actual
         production = ProductionPress.objects.filter(
             press=machine.name,
             shift=shift
@@ -291,6 +293,7 @@ def load_machine_data_production(request):
             total_rework=Sum("pieces_rework")
         )
 
+        # Calcula los totales y piezas actuales
         if (production and (shift == "First")) or (production and (shift == "Second")):
             total_ok = production["total_ok"] if production["total_ok"] else 0
             total_rework = (
@@ -302,12 +305,14 @@ def load_machine_data_production(request):
             total_rework = 0
             actual_ok = 0
 
+        # Obtiene el estado actual de la máquina
         if len(states) > 0:
             last_state = states.latest("date", "start_time")
             machine_state = last_state.state
         else:
             machine_state = "Inactive"
 
+        # Construye el diccionario con los datos de la máquina
         machine_data = {
             "name": machine.name,
             "state": machine_state,
@@ -322,12 +327,11 @@ def load_machine_data_production(request):
         total_piecesProduced += total_ok
         machines_data.append(machine_data)
 
-    # logger.error(f'total_piecesProduced: {total_piecesProduced}')
+    # Construye la respuesta con los datos de todas las máquinas y el total de piezas producidas
     response_data = {
         "machines_data": machines_data,
         "total_piecesProduced": total_piecesProduced,
     }
-    # logger.error(f'total_piecesProduced: {response_data}')
     return JsonResponse(response_data, safe=False)
 
 
