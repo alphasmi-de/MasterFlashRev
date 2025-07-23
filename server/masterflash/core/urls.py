@@ -57,6 +57,7 @@ from .views.press_views import (
     presses_general_pause,
     presses_general_failure,
     get_production_press_by_date,
+    get_production_by_full_shift,
     post_or_put_monthly_goal,
     get_presses_monthly_goal,
     get_presses_production_percentage,
@@ -120,6 +121,11 @@ urlpatterns = [
         "get_production_press_by_date/",
         get_production_press_by_date,
         name="get_all_production_press",
+    ),
+    path(
+        "get_production_by_full_shift/",
+        get_production_by_full_shift,
+        name="get_production_by_full_shift",
     ),
     path("monthly-goal/", post_or_put_monthly_goal, name="post_monthly_goal"),
     path(

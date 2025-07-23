@@ -1,0 +1,122 @@
+# Cambios Implementados para Manejar Turnos que Cruzan la Medianoche
+
+Este documento detalla todos los cambios realizados para solucionar el problema de los turnos que cruzan la medianoche en el sistema MasterFlash.
+
+## 1. Creación de Función Auxiliar `get_shift_date_filter`
+
+Archivo: `c:\Users\analista.ti\Documents\MasterFlashRev\server\masterflash\core\utils.py`
+
+Se creó una nueva función auxiliar que genera los filtros de fecha y hora adecuados para consultas de producción, considerando específicamente los turnos que cruzan la medianoche. Esta función devuelve un tuple con (date_filter, shift_filter) para usar en consultas.
+
+```python
+def get_shift_date_filter(shift: str, query_date):
+    """
+    Genera los filtros de fecha y hora adecuados para consultas de producción
+    considerando turnos que pueden cruzar la medianoche.
+    
+    Args:
+        shift: El turno a consultar ("First" o "Second")
+        query_date: La fecha de referencia para la consulta
+        
+    Returns:
+        Tuple con (date_filter, shift_filter) para usar en consultas
+    """
+    
+    # Si la fecha es None, retornamos filtros vacíos
+    if query_date is None:
+        return Q(), Q()
+```
+
+## 2. Refactorización de Funciones Existentes
+
+### 2.1 Función `sum_pieces` en `utils.py`
+
+Archivo: `c:\Users\analista.ti\Documents\MasterFlashRev\server\masterflash\core\utils.py`
+
+Se modificó para utilizar la nueva función auxiliar `get_shift_date_filter` en lugar de implementar su propia lógica de filtrado por fecha y turno.
+
+### 2.2 Función `send_production_data` en `utils.py`
+
+Archivo: `c:\Users\analista.ti\Documents\MasterFlashRev\server\masterflash\core\utils.py`
+
+Se refactorizó para usar la nueva función auxiliar `get_shift_date_filter` en lugar de implementar su propia lógica de filtrado.
+
+### 2.3 Función `get_production_press_by_date` en `press_views.py`
+
+Archivo: `c:\Users\analista.ti\Documents\MasterFlashRev\server\masterflash\core\views\press_views.py`
+
+Se modificó para usar los filtros dinámicos proporcionados por `get_shift_date_filter` en lugar de filtrar directamente por `date_time__date`.
+
+### 2.4 Función `get_todays_machine_production` en `press_views.py`
+
+Archivo: `c:\Users\analista.ti\Documents\MasterFlashRev\server\masterflash\core\views\press_views.py`
+
+Se actualizó para manejar correctamente los turnos que cruzan la medianoche utilizando `get_shift_date_filter`.
+
+## 3. Nueva Función para Consultar Producción por Turno Completo
+
+Archivo: `c:\Users\analista.ti\Documents\MasterFlashRev\server\masterflash\core\utils.py`
+
+Se creó una nueva función que permite consultar la producción total para un turno completo, independientemente de la fecha:
+
+```python
+def get_shift_production(shift: str, part_number: str = None, work_order: str = None):
+    """
+    Obtiene la producción total para un turno completo, independientemente de la fecha.
+    
+    Args:
+        shift: El turno a consultar ("First" o "Second")
+        part_number: Filtrar por número de parte (opcional)
+        work_order: Filtrar por orden de trabajo (opcional)
+        
+    Returns:
+        Dict con totales de piezas OK y piezas para retrabajo
+    """
+```
+
+## 4. Nueva Vista para Consultar Producción por Turno Completo
+
+Archivo: `c:\Users\analista.ti\Documents\MasterFlashRev\server\masterflash\core\views\press_views.py`
+
+Se agregó una nueva vista que utiliza la función anterior para obtener la producción por turno completo:
+
+```python
+@csrf_exempt
+@require_POST
+def get_production_by_full_shift(request):
+    """
+    Obtiene la producción para un turno completo, considerando correctamente los turnos
+    que cruzan la medianoche.
+    """
+```
+
+## 5. Actualización de URLs
+
+Archivo: `c:\Users\analista.ti\Documents\MasterFlashRev\server\masterflash\core\urls.py`
+
+Se actualizó el archivo de URLs para incluir la nueva vista:
+
+```python
+path(
+    "get_production_by_full_shift/",
+    get_production_by_full_shift,
+    name="get_production_by_full_shift",
+),
+```
+
+## 6. Aclaración en `save_production_records`
+
+Archivo: `c:\Users\analista.ti\Documents\MasterFlashRev\server\masterflash\core\views\production_records_views.py`
+
+Se agregó un comentario explicativo para aclarar por qué no se utiliza `get_shift_date_filter` en esta función:
+
+```python
+# Verifica si ya existen registros para la misma fecha y turno
+# Nota: Aquí no usamos get_shift_date_filter porque Production_records
+# tiene un campo date explícito, no date_time como ProductionPress
+existing_records = Production_records.objects.filter(date=date, shift=shift)
+```
+
+## Conclusión
+
+Con estos cambios, el sistema ahora maneja correctamente los turnos que cruzan la medianoche, asegurando que los datos de producción se consulten de manera precisa y consistente. Los usuarios pueden obtener información tanto por fecha calendario como por turno completo, lo que proporciona una visión más clara y precisa de la producción.

@@ -18,6 +18,8 @@ def save_production_records(request):
         overwrite = data.get("overwrite", False)
 
         # Verifica si ya existen registros para la misma fecha y turno
+        # Nota: Aquí no usamos get_shift_date_filter porque Production_records
+        # tiene un campo date explícito, no date_time como ProductionPress
         existing_records = Production_records.objects.filter(date=date, shift=shift)
 
         if existing_records.exists() and not overwrite:

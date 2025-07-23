@@ -278,28 +278,18 @@ def load_machine_data_production(request):
             workOrder = ""
             molderNumber = "----"
 
-        if shift == "First":
-            production = ProductionPress.objects.filter(
-                press=machine.name,
-                shift=shift,
-                date_time__date=current_date,
-                date_time__time__range=(time(5, 0), time(16, 35)),
-            ).aggregate(total_ok=Sum("pieces_ok"), total_rework=Sum("pieces_rework"))
-        elif shift == "Second":
-            production = ProductionPress.objects.filter(
-                Q(
-                    press=machine.name,
-                    shift=shift,
-                    date_time__date=current_date,
-                    date_time__time__range=(time(16, 36), time.max),
-                )
-                | Q(
-                    press=machine.name,
-                    shift=shift,
-                    date_time__date=current_date,
-                    date_time__time__range=(time.min, time(1, 20)),
-                )
-            ).aggregate(total_ok=Sum("pieces_ok"), total_rework=Sum("pieces_rework"))
+        # Obtener los filtros de fecha y turno usando la función auxiliar
+        from masterflash.core.utils import get_shift_date_filter
+        date_filter, shift_filter = get_shift_date_filter(shift, current_date)
+        
+        # Aplicar los filtros a la consulta
+        production = ProductionPress.objects.filter(
+            press=machine.name,
+            shift=shift
+        ).filter(date_filter).filter(shift_filter).aggregate(
+            total_ok=Sum("pieces_ok"), 
+            total_rework=Sum("pieces_rework")
+        )
 
         if (production and (shift == "First")) or (production and (shift == "Second")):
             total_ok = production["total_ok"] if production["total_ok"] else 0
@@ -498,67 +488,116 @@ def register_data_production(request):
 @csrf_exempt
 @require_POST
 def get_production_press_by_date(request):
-    data = request.POST.dict()
-    print("Received data:", data)
-    date = data.get("date")
-    shift = data.get("shift")
-    if not date or not shift:
-        return JsonResponse({"error": "Date parameter is missing"}, status=400)
-
-    production_press_records = ProductionPress.objects.filter(
-        date_time__date=date, shift=shift
-    ).values(
-        "id",
-        "press",
-        "molder_number",
-        "caliber",
-        "part_number",
-        "work_order",
-        "pieces_ok",
-        "date_time",
-        "worked_hours",
-        "relay",
-    )
-
-    print("ProductionPress records found:", production_press_records)
-
-    result = []
-
-    for record in production_press_records:
-        print("Processing record:", record)
-        part_number_record = (
-            Part_Number.objects.filter(part_number=record["part_number"])
-            .values("caliber", "cavities", "standard")
-            .first()
-        )
-        print("Part_Number record found:", part_number_record)
-        if record["worked_hours"]:
-            worked_hours_obj = WorkedHours.objects.get(id=record["worked_hours"])
-            duration = worked_hours_obj.duration
-            if duration:
-                worked_hours_hours = round(duration.total_seconds() / 3600, 2)
-            else:
-                worked_hours_hours = None
+    try:
+        # Decodifica el cuerpo de la solicitud JSON
+        if request.content_type == "application/json":
+            data = json.loads(request.body)
+            date_str = data.get("date")
+            shift = data.get("shift")
         else:
+            date_str = request.POST.get("date")
+            shift = request.POST.get("shift")
+        
+        if not date_str or not shift:
+            return JsonResponse({"error": "Date and shift parameters are required"}, status=400)
+        
+        # Valida que se reciban los parámetros necesarios
+        if not date_str or not shift:
+            return JsonResponse({"error": "Date and shift parameters are required"}, status=400)
+        
+        # Convierte la fecha recibida a objeto date
+        date = datetime.strptime(date_str, "%Y-%m-%d").date()
+        
+        # Importa y obtiene los filtros para la fecha y el turno
+        from masterflash.core.utils import get_shift_date_filter
+        date_filter, shift_filter = get_shift_date_filter(shift, date)
+        
+        # Consulta los registros de producción filtrados por turno y fecha
+        records = (
+            ProductionPress.objects.filter(shift=shift)
+            .filter(date_filter)
+            .filter(shift_filter)
+            .select_related('worked_hours')
+        )
+        
+        result = []
+        for record in records:
+            # Busca el número de parte relacionado y obtiene sus datos
+            part = Part_Number.objects.filter(part_number=record.part_number).first()
+            cavities = part.cavities if part else None
+            standard = part.standard if part else None
+            
+            # Calcula las horas trabajadas usando el objeto relacionado
             worked_hours_hours = None
-        if part_number_record:
-            combined_record = {
-                "id": record["id"],
-                "press": record["press"],
-                "molder_number": record["molder_number"],
-                "part_number": record["part_number"],
-                "work_order": record["work_order"],
-                "caliber": record["caliber"],
-                "cavities": part_number_record["cavities"],
-                "standard": part_number_record["standard"],
-                "pieces_ok": record["pieces_ok"],
-                "hour": record["date_time"].strftime("%H:%M:%S"),
+            wh = record.worked_hours
+            if wh and wh.duration:
+                duration = wh.duration
+                if duration:
+                    worked_hours_hours = round(duration.total_seconds() / 3600, 2)
+            
+            # Formatea la hora del registro
+            hour_str = record.date_time.strftime("%H:%M:%S") if record.date_time else ""
+            
+            # Calcula la eficiencia
+            efficiency = 0
+            if worked_hours_hours and worked_hours_hours > 0:
+                efficiency = (record.pieces_ok / worked_hours_hours) * 100
+            
+            proposed_efficiency = 0  # Puedes ajustar la lógica según tu necesidad
+            
+            # Combina todos los datos en un diccionario
+            combined = {
+                "id": record.id,
+                "press": record.press,
+                "molder_number": record.molder_number,
+                "part_number": record.part_number,
+                "work_order": record.work_order,
+                "caliber": record.caliber,
+                "cavities": cavities,
+                "standard": standard,
+                "pieces_ok": record.pieces_ok,
+                "hour": hour_str,
                 "worked_hours": worked_hours_hours,
-                "relay": record["relay"],
+                "relay": record.relay,
+                "efficiency": efficiency,
+                "proposed_efficiency": proposed_efficiency,
             }
-            result.append(combined_record)
-    print("Final result:", result)
-    return JsonResponse(result, safe=False)
+            result.append(combined)
+        
+        # Devuelve la lista de resultados en formato JSON
+        return JsonResponse(result, safe=False)
+    
+    except Exception as e:
+        # Maneja cualquier error y lo devuelve como respuesta JSON
+        return JsonResponse({"error": str(e)}, status=500)
+
+@csrf_exempt
+@require_POST
+def get_production_by_full_shift(request):
+    """
+    Obtiene la producción para un turno completo, considerando correctamente los turnos
+    que cruzan la medianoche.
+    """
+    try:
+        data = json.loads(request.body)
+        shift = data.get("shift")
+        part_number = data.get("part_number")
+        work_order = data.get("work_order")
+        
+        if not shift:
+            return JsonResponse({"error": "Shift parameter is required"}, status=400)
+        
+        # Importar la función para obtener producción por turno
+        from masterflash.core.utils import get_shift_production
+        
+        # Obtener la producción total para el turno
+        production_data = get_shift_production(shift, part_number, work_order)
+        
+        return JsonResponse(production_data, safe=False)
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=500)
+
+ 
 
 
 @csrf_exempt
@@ -758,10 +797,15 @@ def get_todays_machine_production(request):
             return JsonResponse({"error": "Missing machine parameter"}, status=400)
 
         try:
+            # Obtener los filtros de fecha y turno usando la función auxiliar
+            from masterflash.core.utils import get_shift_date_filter
+            date_filter, shift_filter = get_shift_date_filter(shift, date.today())
+            
+            # Aplicar los filtros a la consulta
             production_data = (
-                ProductionPress.objects.filter(
-                    press=machine, date_time__date=date.today(), shift=shift
-                )
+                ProductionPress.objects.filter(press=machine, shift=shift)
+                .filter(date_filter)
+                .filter(shift_filter)
                 .values("part_number")
                 .annotate(total_pieces_ok=Sum("pieces_ok"))
             )

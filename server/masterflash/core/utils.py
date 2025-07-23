@@ -71,6 +71,117 @@ def get_shift(current_time: time) -> str:
 
 
 
+
+def get_shift_date_filter(shift: str, query_date):
+    """
+    Retorna filtros para date_time basados en el turno solicitado y la fecha.
+    Controla:
+      - Validaciones de entrada
+      - Turnos que cruzan la medianoche
+      - Turnos mal configurados
+      - Casos extremos como horarios iguales
+    """
+
+    # Validación inicial
+    if not shift or not query_date:
+        raise ValueError("Se requieren ambos valores: shift y query_date")
+
+    # Validación de tipo
+    if not isinstance(query_date, datetime) and not isinstance(query_date, (datetime, type(datetime.now().date()))):
+        raise ValueError("query_date debe ser una fecha o datetime válida")
+
+    if shift not in ["First", "Second"]:
+        raise ValueError(f"Shift '{shift}' no es válido. Usa 'First' o 'Second'.")
+
+    # Obtener horario
+    schedule = ShiftSchedule.objects.first()
+    if not schedule:
+        raise ValueError("No existe ninguna configuración de turnos en la base de datos.")
+
+    try:
+        # Turno 1
+        if shift == "First":
+            start_time = schedule.first_shift_start
+            end_time = schedule.first_shift_end
+
+            if not start_time or not end_time:
+                raise ValueError("Horario incompleto para el primer turno.")
+
+            if start_time == end_time:
+                raise ValueError("El horario del primer turno no puede tener misma hora de inicio y fin.")
+
+            start_datetime = datetime.combine(query_date, start_time)
+            end_datetime = datetime.combine(query_date, end_time)
+
+            if end_datetime <= start_datetime:
+                # Error lógico
+                raise ValueError("La hora de fin del primer turno debe ser después de la hora de inicio.")
+
+            return Q(date_time__gte=start_datetime, date_time__lt=end_datetime), Q()
+
+        # Turno 2
+        elif shift == "Second":
+            start_time = schedule.second_shift_start
+            end_time = schedule.second_shift_end
+
+            if not start_time or not end_time:
+                raise ValueError("Horario incompleto para el segundo turno.")
+
+            if start_time == end_time:
+                raise ValueError("El horario del segundo turno no puede tener misma hora de inicio y fin.")
+
+            # Turno cruza la medianoche
+            if end_time < start_time:
+                start_datetime = datetime.combine(query_date, start_time)
+                end_datetime = datetime.combine(query_date + timedelta(days=1), end_time)
+            else:
+                # Turno dentro del mismo día
+                start_datetime = datetime.combine(query_date, start_time)
+                end_datetime = datetime.combine(query_date, end_time)
+
+            if end_datetime <= start_datetime:
+                raise ValueError("El rango de tiempo del segundo turno no es válido.")
+
+            return Q(date_time__gte=start_datetime, date_time__lt=end_datetime), Q()
+
+    except Exception as e:
+        raise ValueError(f"Error al construir el filtro para el turno '{shift}': {str(e)}")
+
+
+
+def get_shift_production(shift: str, part_number: str = None, work_order: str = None):
+    """
+    Obtiene la producción total para un turno completo, independientemente de la fecha.
+    
+    Args:
+        shift: El turno a consultar ("First" o "Second")
+        part_number: Filtrar por número de parte (opcional)
+        work_order: Filtrar por orden de trabajo (opcional)
+        
+    Returns:
+        Dict con totales de piezas OK y piezas para retrabajo
+    """
+    # Construir el filtro base por turno
+    query = Q(shift=shift)
+    
+    # Aplicar filtros adicionales si se proporcionan
+    if part_number:
+        query &= Q(part_number=part_number)
+    if work_order:
+        query &= Q(work_order=work_order)
+    
+    # Obtener la suma de piezas
+    result = ProductionPress.objects.filter(query).aggregate(
+        total_ok=Sum('pieces_ok'),
+        total_rework=Sum('pieces_rework')
+    )
+    
+    return {
+        'total_ok': result['total_ok'] or 0,
+        'total_rework': result['total_rework'] or 0
+    }
+
+
 def sum_pieces(machine: LinePress, shift: str, current_date) -> int:
     """
     Suma las piezas producidas para una máquina, turno y fecha dados,
@@ -87,36 +198,18 @@ def sum_pieces(machine: LinePress, shift: str, current_date) -> int:
     if not last_record:
         return 0
 
-    # Obtener (o crear) el horario de turnos.
-    schedule = ShiftSchedule.objects.first() or ShiftSchedule.objects.create()
-
-    # Definir el filtro de tiempo en función del turno.
-    if shift == "First":
-        shift_filter = Q(
-            date_time__time__range=(
-                schedule.first_shift_start,
-                schedule.first_shift_end,
-            )
-        )
-    elif shift == "Second":
-        shift_filter = Q(
-            date_time__time__range=(
-                schedule.second_shift_start,
-                schedule.second_shift_end,
-            )
-        ) | Q(date_time__time__range=(time.min, schedule.second_shift_end))
-    else:
-        return 0
+    # Obtener los filtros de fecha y turno
+    date_filter, shift_filter = get_shift_date_filter(shift, current_date)
 
     # Filtrar y agregar la suma de piezas OK
     result = (
         ProductionPress.objects.filter(
             press=machine.name,
             shift=shift,
-            date_time__date=current_date,
             part_number=last_record["part_number"],
             work_order=last_record["work_order"],
         )
+        .filter(date_filter)
         .filter(shift_filter)
         .aggregate(total_pieces=Sum("pieces_ok"))
     )
@@ -182,39 +275,8 @@ def send_production_data():
         if wh:
             worked_hours_dict[item["press"]] = wh
 
-    # Obtener el horario de turnos
-    try:
-        schedule = ShiftSchedule.objects.first()
-        if not schedule:
-            raise Exception("No Shift Schedule defined")
-    except ShiftSchedule.DoesNotExist:
-        schedule = ShiftSchedule.objects.create()
-
-    # Definir el filtro de turno según el horario
-    if shift == "First":
-        shift_filter = Q(
-            date_time__time__range=(
-                schedule.first_shift_start,
-                schedule.first_shift_end,
-            )
-        )
-        date_filter = Q(date_time__date=current_date)
-    elif shift == "Second":
-        shift_filter = Q(
-            date_time__time__range=(
-                schedule.second_shift_start,
-                schedule.second_shift_end,
-            )
-        )
-        if schedule.second_shift_end < schedule.second_shift_start:
-            # El turno comenzó el día anterior y termina en el día actual
-            start_date = current_date - timedelta(days=1)
-            end_date = current_date
-            date_filter = Q(date_time__date=start_date) | Q(date_time__date=end_date)
-        else:
-            date_filter = Q(date_time__date=current_date)
-    else:
-        date_filter = Q(date_time__date=current_date)
+    # Obtener los filtros de fecha y turno usando la función auxiliar
+    date_filter, shift_filter = get_shift_date_filter(shift, current_date)
 
     # Obtener la producción total del turno actual
     shift_productions = (

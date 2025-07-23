@@ -70,11 +70,20 @@ const PressesRegisterProduction: React.FC = () => {
                 { date: selectedDate, shift: selectedShift },
                 {
                     headers: {
-                        'Content-Type': 'application/x-www-form-urlencoded',
+                        'Content-Type': 'application/json',
                     },
                 },
             );
+            
+            // Verificar si la respuesta tiene datos
+            if (!response.data || response.data.error) {
+                console.error('Error en la respuesta:', response.data?.error || 'No hay datos');
+                toast.error('Error al cargar los datos de producción');
+                return;
+            }
+            
             const responseData: DataItem[] = response.data;
+            console.log('Datos recibidos:', responseData);
 
             const groupedData = groupDataItems(responseData);
 
@@ -87,11 +96,12 @@ const PressesRegisterProduction: React.FC = () => {
                 item.proposed_efficiency = 0;
             });
 
-            console.log(groupedData);
+            console.log('Datos agrupados:', groupedData);
 
             setEditableData(groupedData);
         } catch (error) {
             console.error('Error fetching data:', error);
+            toast.error('Error al cargar los datos de producción');
         }
     }, [selectedDate, selectedShift]);
 
